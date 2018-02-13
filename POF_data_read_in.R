@@ -191,7 +191,7 @@ cons = char2num(t_despesa_individual_s) %>%
 
 # Master data table for food analysis
 # kcal:vita are nutrient/100g food.
-food.master <- food.tbl %>% rbind.fill(cons) %>% data.table(key=c("id", "code7")) %>% 
+food.all <- food.tbl %>% rbind.fill(cons) %>% data.table(key=c("id", "code7")) %>% 
   mutate(code5=floor(code7/100)) %>% group_by(id) %>%
   mutate(eatout.share = sum(eatout*val_tot) / sum(val_tot),
          mapped = ifelse(is.na(kcal), 0, 1)) %>%
@@ -216,13 +216,38 @@ hh <- hh %>% mutate(income = income * CPI.r / PPP$PA.NUS.PRVT.PP) %>%
 
 
 
+### Combine food group information
+
+food.group <- read_excel("P:/ene.general/DecentLivingEnergy/Surveys/Brazil/POF 2008-2009/Documentation/POF_2008-2009_Codigos_de_alimentacao.xls",
+                        skip=2) %>% select(-2:-3) %>% setnames(c("code5", "group.id1", "descr1", "group.id2", "descr2")) %>%
+  filter(!is.na(code5))
+food.wgrp.names <- unique(read_excel("P:/ene.general/DecentLivingEnergy/Surveys/Brazil/POF 2008-2009/Documentation/POF_2008-2009_Codigos_de_alimentacao.xls",
+           sheet=3, skip=2) %>% select(3,7)) %>% setnames(c("group.id1", "wgroup"))
+food.grp.names <- unique(read_excel("P:/ene.general/DecentLivingEnergy/Surveys/Brazil/POF 2008-2009/Documentation/POF_2008-2009_Codigos_de_alimentacao.xls",
+                                     sheet=3, skip=2) %>% select(5,8)) %>% setnames(c("group.id2", "group"))
+
+# English names for groups + All eatout items combined
+food.group <- food.group %>% 
+  left_join(food.wgrp.names) %>% 
+  left_join(food.grp.names) %>% 
+  select(code5, group.id1, wgroup, group.id2, group) %>%
+  mutate_cond(is.na(group.id2), group.id2="2", group="eatout or prepared" )
+# write.table(food.cat.names, "clipboard", sep="\t", row.names = FALSE, col.names = TRUE)
+
+food.master <- food.all %>% left_join(food.group)
+
+# View(food.master %>% count(group.id1))
+# View(food.master %>% count(group.id2))
+# View(food.master %>% count(group))
+
+
 ###### NOT FOR NOW  ######
 # Probably used to justify/unjustify eatout nutrition pattern
 ### Separate food consumption data set (POF7)
-foodcons = char2num(t_consumo_s) %>%
-  mutate(id=as.character(cod_uf*1e6 + num_seq*1e3 + num_dv*100 + cod_domc)) %>%
-  mutate(code7=as.numeric(paste0(str_pad(num_quadro,width=2,pad=0), str_pad(cod_item,width=5,pad=0)))) 
-
-length(unique(foodcons$id))
+# foodcons = char2num(t_consumo_s) %>%
+#   mutate(id=as.character(cod_uf*1e6 + num_seq*1e3 + num_dv*100 + cod_domc)) %>%
+#   mutate(code7=as.numeric(paste0(str_pad(num_quadro,width=2,pad=0), str_pad(cod_item,width=5,pad=0)))) 
+# 
+# length(unique(foodcons$id))
   
 
