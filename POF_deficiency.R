@@ -10,21 +10,33 @@
 
 ### Summarize over each household
 
-# Identify outeaters
-outeaters <- food.master %>% group_by(id) %>% summarise(eatout.share=first(eatout.share)) %>% mutate(outeater=(eatout.share > 0.3))
-
 ### Get total daily average intakes by household
 # qty_tot in kg
 # Derive intake per day per hh for the mapped items, and identify the unmapped val_tot
-sum.hh <- food.master %>% mutate_at(vars(kcal:vita), funs(tot=.*qty_tot*10/365)) %>% group_by(id, mapped) %>% 
-  summarise_at(vars(ends_with("_tot")), sum, na.rm=TRUE) %>% select(-qty_tot) 
+# without outeaters
+sum.hh <- 
+  # food.master %>%
+  food.master.excl.outeater %>%
+  mutate_at(vars(kcal:vita), funs(tot=.*qty_tot*10/365)) %>% group_by(id, mapped) %>% 
+  # left_join(outeaters) %>% filter(!outeater) %>%
+  summarise_at(vars(ends_with("_tot")), sum, na.rm=TRUE) %>% select(-qty_tot)
+
 # Estimate nutrition intake from unmapped food (scale based on val_tot)
-estim.unmapped <- (sum.hh %>% filter(mapped==1) %>% left_join(sum.hh %>% filter(mapped==0) %>% select(id, val=val_tot))) %>% 
-  mutate_at(vars(kcal_tot:vita_tot), funs(.*val/val_tot)) %>% select(-val_tot) %>% rename(val_tot=val) %>% mutate(mapped=0)
-# Summarize the total intake and derive per cu amount
-sum.hh <- sum.hh %>% filter(mapped==1) %>% rbind(estim.unmapped) %>% arrange(id) %>% group_by(id)
-sum.hh <- sum.hh %>% summarise_all(sum, na.rm=TRUE) %>% left_join(hh) %>% left_join(outeaters) %>% data.frame() %>% 
-  mutate_at(vars(kcal_tot:vita_tot), funs(percu=./cu_eq)) 
+# Note: It appears that without this step of extrapolation, mean kcal estimates are much closer to IBGE means.
+# Thus, I may need to skip line 27-34.
+# estim.unmapped <- (sum.hh %>% filter(mapped==1) %>% 
+#                      left_join(sum.hh %>% filter(mapped==0) %>% select(id, val=val_tot))) %>% 
+#   mutate_at(vars(kcal_tot:vita_tot), funs(.*val/val_tot)) %>% 
+#   select(-val_tot) %>% rename(val_tot=val) %>% mutate(mapped=0)
+# 
+# # Summarize the total intake and derive per cu amount
+# sum.hh <- sum.hh %>% filter(mapped==1) %>% rbind(estim.unmapped) %>% arrange(id) %>% group_by(id)
+
+sum.hh <- sum.hh %>% summarise_all(sum, na.rm=TRUE) %>% 
+  # left_join(hh.excl.outeater) %>%
+  left_join(hh) %>%
+  data.frame() %>% 
+  mutate_at(vars(kcal_tot:vita_tot), funs(percu=./cu_eq, percap=./hh_size)) 
 
 
 ### Derive gap sizes for each household
@@ -73,38 +85,59 @@ gap.hh <- sum.hh %>% # Daily intake/CU
 
 
 ### Gap size and count by nutrient for each pop group
-cal.gap.group <- gap.hh %>% group_by(region, urban, inc_grp, cal_def) %>% summarise(cal_gap_avg = weighted.mean(cal_gap, hh_size*weight, na.rm=TRUE),
+cal.gap.group <- gap.hh %>% group_by(cluster, cal_def) %>% summarise(cal_gap_avg = weighted.mean(cal_gap, hh_size*weight, na.rm=TRUE),
                                                                      cal_def_ct = sum(hh_size*weight, na.rm=TRUE)) %>%
     gather(variable, value, cal_gap_avg:cal_def_ct) %>% unite(temp, cal_def, variable) %>% spread(temp, value) %>% 
-    setNames(c("region", "urban", "inc_grp", "cal_surp_ct", "cal_surp_avg", "cal_def_ct", "cal_def_avg"))
+    setNames(c("cluster", "cal_surp_ct", "cal_surp_avg", "cal_def_ct", "cal_def_avg"))
   
-prtn.gap.group  <- gap.hh %>% group_by(region, urban, inc_grp, protein_def) %>% summarise(protein_gap_avg = weighted.mean(protein_gap, hh_size*weight, na.rm=TRUE),
+prtn.gap.group  <- gap.hh %>% group_by(cluster, protein_def) %>% summarise(protein_gap_avg = weighted.mean(protein_gap, hh_size*weight, na.rm=TRUE),
                                                                      protein_def_ct = sum(hh_size*weight, na.rm=TRUE)) %>%
     gather(variable, value, protein_gap_avg:protein_def_ct) %>% unite(temp, protein_def, variable) %>% spread(temp, value) %>% 
-    setNames(c("region", "urban", "inc_grp", "protein_surp_ct", "protein_surp_avg", "protein_def_ct", "protein_def_avg"))
+    setNames(c("cluster", "protein_surp_ct", "protein_surp_avg", "protein_def_ct", "protein_def_avg"))
 
-iron.gap.group <- gap.hh %>% group_by(region, urban, inc_grp, iron_def) %>% summarise(iron_gap_avg = weighted.mean(iron_gap, hh_size*weight, na.rm=TRUE),
+iron.gap.group <- gap.hh %>% group_by(cluster, iron_def) %>% summarise(iron_gap_avg = weighted.mean(iron_gap, hh_size*weight, na.rm=TRUE),
                                                                      iron_def_ct = sum(hh_size*weight, na.rm=TRUE)) %>%
     gather(variable, value, iron_gap_avg:iron_def_ct) %>% unite(temp, iron_def, variable) %>% spread(temp, value) %>% 
-    setNames(c("region", "urban", "inc_grp", "iron_surp_ct", "iron_surp_avg", "iron_def_ct", "iron_def_avg"))
+    setNames(c("cluster", "iron_surp_ct", "iron_surp_avg", "iron_def_ct", "iron_def_avg"))
   
-zinc.gap.group <- gap.hh %>% group_by(region, urban, inc_grp, zinc_def) %>% summarise(zinc_gap_avg = weighted.mean(zinc_gap, hh_size*weight, na.rm=TRUE),
+zinc.gap.group <- gap.hh %>% group_by(cluster, zinc_def) %>% summarise(zinc_gap_avg = weighted.mean(zinc_gap, hh_size*weight, na.rm=TRUE),
                                                                      zinc_def_ct = sum(hh_size*weight, na.rm=TRUE)) %>%
     gather(variable, value, zinc_gap_avg:zinc_def_ct) %>% unite(temp, zinc_def, variable) %>% spread(temp, value) %>% 
-    setNames(c("region", "urban", "inc_grp", "zinc_surp_ct", "zinc_surp_avg", "zinc_def_ct", "zinc_def_avg"))
+    setNames(c("cluster", "zinc_surp_ct", "zinc_surp_avg", "zinc_def_ct", "zinc_def_avg"))
   
-vita.gap.group <- gap.hh %>% group_by(region, urban, inc_grp, vita_def) %>% summarise(vita_gap_avg = weighted.mean(vita_gap, hh_size*weight, na.rm=TRUE),
+vita.gap.group <- gap.hh %>% group_by(cluster, vita_def) %>% summarise(vita_gap_avg = weighted.mean(vita_gap, hh_size*weight, na.rm=TRUE),
                                                                      vita_def_ct = sum(hh_size*weight, na.rm=TRUE)) %>%
     gather(variable, value, vita_gap_avg:vita_def_ct) %>% unite(temp, vita_def, variable) %>% spread(temp, value) %>% 
-    setNames(c("region", "urban", "inc_grp", "vita_surp_ct", "vita_surp_avg", "vita_def_ct", "vita_def_avg"))
+    setNames(c("cluster", "vita_surp_ct", "vita_surp_avg", "vita_def_ct", "vita_def_avg"))
   
 
 
 # Deficiency and average intake by group (region, urban, income) 
-# sum.group <- sum.hh %>% group_by(region, urban, inc_grp) %>% summarise_at(vars(kcal_tot:vita_tot), funs(sum(.*weight/sum(weight*cu_eq)))) %>%
-#   left_join(sum.hh %>% group_by(region, urban, inc_grp) %>% summarise(total_pop=sum(hh_size*weight)))
+# sum.group <- sum.hh %>% group_by(cluster) %>% summarise_at(vars(kcal_tot:vita_tot), funs(sum(.*weight/sum(weight*cu_eq)))) %>%
+#   left_join(sum.hh %>% group_by(cluster) %>% summarise(total_pop=sum(hh_size*weight)))
 # This has Weighted per-cu intake/day, total population by group, too.
-gap.group <- gap.hh %>% group_by(region, urban, inc_grp) %>% summarise_at(vars(ends_with("percu")), funs(sum(.*weight/sum(weight)))) %>%
-  left_join(gap.hh %>% group_by(region, urban, inc_grp) %>% summarise(total_pop=sum(hh_size*weight))) %>%  # 
+gap.group <- gap.hh %>% group_by(cluster) %>% summarise_at(vars(kcal_tot_percu:vita_tot_percap), funs(sum(.*weight/sum(weight)))) %>%
+  left_join(gap.hh %>% group_by(cluster) %>% summarise(total_pop=sum(hh_size*weight), total_cu=sum(cu_eq*weight))) %>%  # 
   left_join(cal.gap.group) %>% left_join(prtn.gap.group) %>% 
   left_join(iron.gap.group) %>% left_join(zinc.gap.group) %>% left_join(vita.gap.group) 
+
+write.xlsx(gap.group, "summary.cluster_hh.excl.outeater.xlsx") # with hh.excl.outeater
+# write.xlsx(gap.group, "summary.cluster_hh.xlsx") # with hh
+gap.tot <- gap.hh %>% summarise_at(vars(kcal_tot_percu:vita_tot_percap), funs(sum(.*weight/sum(weight)))) %>% 
+  mutate(total_pop=gap.hh %>% summarise(total_pop=sum(hh_size*weight)))
+gap.urban.rural <- gap.hh %>% group_by(urban) %>% summarise_at(vars(kcal_tot_percu:vita_tot_percap), funs(sum(.*weight/sum(weight)))) %>% 
+  mutate(total_pop=gap.hh %>% group_by(urban) %>% summarise(total_pop=sum(hh_size*weight)))
+gap.region <- gap.hh %>% group_by(Reg) %>% summarise_at(vars(kcal_tot_percu:vita_tot_percap), funs(sum(.*weight/sum(weight)))) %>% 
+  mutate(total_pop=gap.hh %>% group_by(Reg) %>% summarise(total_pop=sum(hh_size*weight)))
+write.table(gap.tot, "clipboard", sep="\t", row.names = FALSE, col.names = TRUE)
+
+a <- food.tbl %>%
+  left_join(data.table(hh, key="id"), by="id") %>% data.frame() %>%
+  left_join(outeaters, by="id") %>% 
+  group_by(cluster) %>% summarise(eo.share=weighted.mean(eatout, val_tot*weight, na.rm=TRUE))
+
+a <- a %>% left_join(hh %>% left_join(outeaters) %>% group_by(cluster) %>% 
+  summarise(eo.pop=weighted.mean(outeater, hh_size*weight, na.rm=TRUE),
+              # sum(outeater*hh_size*weight)/sum(hh_size*weight),
+            tot.pop=sum(hh_size*weight)))
+                                  

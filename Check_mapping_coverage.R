@@ -39,11 +39,15 @@ hist(a$val_pcap, 1000, xlim=c(0, 6000))
 ### 1. Link the nutri info from Claudia and see the coverage 
 # This use 'food' table from POF_test.R
 # giving a flawed number because of redundancy in the mapping
-a <- food %>% mutate(covered = code7 %in% POF.covered) %>% left_join(POF.nutri.p %>% select(-code5)) %>% arrange(id, code7) 
-a <- food %>% mutate(covered = code5 %in% POF.covered5) %>% left_join(POF.nutri.p %>% select(-code7)) %>% arrange(id, code5)
-a %>% group_by(covered) %>% summarise(val.tot=sum(value*weight, na.rm=TRUE), val.share=sum(value*weight)/sum(a$value*a$weight), 
-                                      kcal.tot=sum(kg*weight*kcal*10, na.rm=TRUE), 
-                                      kcal.pcap.day=sum(kg*weight*kcal*10, na.rm=TRUE)/sum(hh$hh_size*hh$weight)/365)
+# a <- food %>% mutate(covered = code7 %in% POF.covered) %>% left_join(POF.nutri.p %>% select(-code5)) %>% arrange(id, code7) %>% left_join(hh)
+a <- food %>% select(-c(kcal:vita)) %>% left_join(POF.nutri.p %>% select(-code7)) 
+%>%
+  
+  mutate(covered = code5 %in% POF.covered5) %>% left_join(POF.nutri.p %>% select(-code7)) %>% 
+  arrange(id, code5) %>% left_join(hh)
+a %>% group_by(covered) %>% summarise(val.tot=sum(val_tot*weight, na.rm=TRUE), val.share=sum(val_tot*weight)/sum(a$val_tot*a$weight), 
+                                      kcal.tot=sum(qty_tot*weight*kcal*10, na.rm=TRUE), 
+                                      kcal.pcap.day=sum(qty_tot*weight*kcal*10, na.rm=TRUE)/sum(hh$hh_size*hh$weight)/365)
 
 
 

@@ -70,9 +70,9 @@ d1 = d %>%
   mutate(income=income*12) %>%  # Original income variable is monthly HH income; this converts to annual
   mutate(date_int=as.Date("2008-05-19")+(perd_cod_p_visit_realm_em-1)*7) %>% # Raw variable gives number of weeks beginning May 19 2008
   left_join(geo_code) %>%   # cod_uf is numeric link to state name
-  rename(region=reg1) %>%
+  rename(state=reg1) %>%
   mutate(urban=ifelse(estrato >= estrato.cats[match(cod_uf, names(estrato.cats))] , 0 , 1 ))  %>%
-  select(id, weight, date_int, region, urban, income)
+  select(id, weight, date_int, state, urban, income)
 
 
 
@@ -154,7 +154,8 @@ food = char2num(t_caderneta_despesa_s) %>%
   summarise(val_tot=sum(value), qty_tot=sum(kg)) %>%  # Sum values by household and item
   filter(val_tot>0 | is.na(val_tot)) %>%
   left_join(taco %>% select(-preparation, -code5), by="code7") %>%
-  mutate(code5=floor(code7/100)) 
+  mutate(code5=floor(code7/100)) %>%
+  rename(POF.item=item)
 
 # Nutritional table based on code5 (from Claudia)
 a <- unique(POF.nutri.p %>% select(-code7)) %>% group_by(code5) %>% mutate(count=n()) %>% arrange(code5, desc(kcal)) %>% slice(1) 
@@ -163,9 +164,10 @@ a <- unique(POF.nutri.p %>% select(-code7)) %>% group_by(code5) %>% mutate(count
 food.unmapped <- food %>% filter(is.na(kcal)) %>% select(id:qty_tot, code5) %>% left_join(a %>% select(-count), by="code5") 
 
 # Merge all food obs (at home) and add eatout flag
-food.tbl <- food %>% filter(!is.na(kcal)) %>% select(id, code7, code5, item, val_tot, qty_tot, kcal, protein, iron, zinc, vita) %>%
-  rbind(food.unmapped %>% select(id, code7, code5, item=item.eng, val_tot, qty_tot, kcal, protein, iron, zinc, vita)) %>% arrange(id, code7) %>%
-  mutate(eatout=ifelse(floor(code5/1e3)==85, 1, 0)) %>%  # to-go (viagem) food as eatout
+food.tbl <- food %>% filter(!is.na(kcal)) %>% select(id, code7, code5, POF.item, val_tot, qty_tot, kcal:vita) %>%
+  rbind(food.unmapped %>% select(id, code7, code5, POF.item=item.eng, val_tot, qty_tot, kcal:vita)) %>% 
+  arrange(id, code7) %>%
+  mutate(eatout=ifelse(floor(code5/1e3)==85, 1, 0)) %>%  # Add to-go (viagem) food as eatout
   data.table(key=c("id", "code7", "code5")) 
 
 
@@ -185,17 +187,59 @@ cons = char2num(t_despesa_individual_s) %>%
   mutate(eatout=1) %>%  # All items here are outside consumption
   data.table(key="code7") %>%
   inner_join(ce_code %>% mutate(code7=as.numeric(code)), by="code7") %>%  # Keep only food items
-  select(id, code7, item=product, val_tot, eatout)
+  select(id, code7, POF.item=product, val_tot, eatout) 
 
+
+
+# Add more to hh
+hh <- hh %>% mutate(income = income * CPI.r / PPP$PA.NUS.PRVT.PP) %>% 
+  mutate(inc.percap = income/hh_size) %>% ungroup() %>%
+  # income groups, decile, quartile separately determined for urban and rural
+  group_by(urban) %>%
+  arrange(urban, inc.percap) %>%
+  mutate(cumpop = cumsum(hh_size*weight)/sum(weight*hh_size)) %>%
+  mutate(decile = cut(cumpop, breaks = seq(0, 1, 0.1), labels=paste0("decile", 1:10), include.lowest = TRUE, ordered=TRUE)) %>%
+  mutate(quartile = cut(cumpop, breaks = seq(0, 1, 0.25), labels=paste0("quartile", 1:4), include.lowest = TRUE, ordered=TRUE)) %>%
+  select(-cumpop) %>%
+  # mutate(inc_grp=as.integer(cut(inc.percap,breaks=c(0, 1.4*365, 2.8*365, 5.6*365, max(inc.percap)*365), labels=c(1:4)))) %>% # NEED TO ADJUST!
+  mutate(inc_grp=as.numeric(quartile)) %>% 
+  mutate(female_adult=hh_size-minor-male_adult, female_minor=minor-male_minor) %>%
+  mutate(cu_eq=(male_adult*getcu("male_adult")+female_adult*getcu("female_adult")+
+                  male_minor*getcu("male_minor")+female_minor*getcu("female_minor"))) %>%
+  left_join(states.BR) %>%
+  mutate(cluster=paste0(Reg, urban, '.', inc_grp))   # By region or state?
+
+
+### Combine food group information
+
+food.group <- read_excel("P:/ene.general/DecentLivingEnergy/Surveys/Brazil/POF 2008-2009/Documentation/POF_2008-2009_Codigos_de_alimentacao.xls",
+                         skip=2) %>% select(-2:-3) %>% setnames(c("code5", "group.id1", "descr1", "group.id2", "descr2")) %>%
+  filter(!is.na(code5))
+food.wgrp.names <- unique(read_excel("P:/ene.general/DecentLivingEnergy/Surveys/Brazil/POF 2008-2009/Documentation/POF_2008-2009_Codigos_de_alimentacao.xls",
+                                     sheet=3, skip=2) %>% select(3,7)) %>% setnames(c("group.id1", "wgroup"))
+food.grp.names <- unique(read_excel("P:/ene.general/DecentLivingEnergy/Surveys/Brazil/POF 2008-2009/Documentation/POF_2008-2009_Codigos_de_alimentacao.xls",
+                                    sheet=3, skip=2) %>% select(5,8)) %>% setnames(c("group.id2", "group"))
+
+# English names for groups + All eatout items combined
+food.group <- food.group %>% 
+  left_join(food.wgrp.names) %>% 
+  left_join(food.grp.names) %>% 
+  select(code5, group.id1, wgroup, group.id2, group) %>%
+  mutate_cond(is.na(group.id2), group.id2="2", group="eatout or prepared" ) %>%
+  mutate_cond(group=="Others" | group=="Organic" | group=="Light and Diet", group=paste(group, wgroup, sep="_")) %>%
+  rename(item=group, group=wgroup)
+# write.table(food.cat.names, "clipboard", sep="\t", row.names = FALSE, col.names = TRUE)
 
 
 # Master data table for food analysis
+# Merge hh characteristics
 # kcal:vita are nutrient/100g food.
-food.all <- food.tbl %>% rbind.fill(cons) %>% data.table(key=c("id", "code7")) %>% 
+food.tbl <- food.tbl %>% rbind.fill(cons) %>% 
   mutate(code5=floor(code7/100)) %>% group_by(id) %>%
   mutate(eatout.share = sum(eatout*val_tot) / sum(val_tot),
-         mapped = ifelse(is.na(kcal), 0, 1)) %>%
-  left_join(data.table(hh, key="id"), by="id") %>% data.frame() # %>% select(id, code7, item, val_tot, qty_tot, eatout, kcal:vita, everything())
+         mapped = ifelse(is.na(kcal), 0, 1))  %>%
+  # left_join(data.table(hh, key="id"), by="id") %>% data.frame() %>%
+  left_join(food.group) 
 
 
 
@@ -206,48 +250,36 @@ PPP <- WDI(country = "BR", indicator = c("PA.NUS.PRVT.PP"), start = 2010, end = 
 CPI <- WDI(country = "BR", indicator = "FP.CPI.TOTL", start = 2008, end = 2010, extra = FALSE, cache = NULL)
 CPI.r <- as.numeric(CPI %>% filter(year==2010) %>% select(FP.CPI.TOTL) / CPI %>% filter(year==2008) %>% select(FP.CPI.TOTL))
 # EXR <- WDI(country = "BR", indicator = "PA.NUS.FCRF", start = 2008, end = 2008, extra = FALSE, cache = NULL) # Exchange rate (MER) [LCU/$]
- 
-hh <- hh %>% mutate(income = income * CPI.r / PPP$PA.NUS.PRVT.PP) %>%
-  mutate(inc.percap = income/hh_size) %>%
-  mutate(inc_grp=as.integer(cut(inc.percap,breaks=c(0, 1.4*365, 2.8*365, 5.6*365, max(inc.percap)*365), labels=c(1:4)))) %>% # NEED TO ADJUST!
-  mutate(female_adult=hh_size-minor-male_adult, female_minor=minor-male_minor) %>%
-  mutate(cu_eq=(male_adult*getcu("male_adult")+female_adult*getcu("female_adult")+
-                  male_minor*getcu("male_minor")+female_minor*getcu("female_minor")))
 
 
 
-### Combine food group information
+### Identify outeaters
+outeat.threshold <- 0.3
+outeaters <- food.tbl %>% group_by(id) %>% summarise(eatout.share=first(eatout.share)) %>% mutate(outeater=(eatout.share > outeat.threshold))
 
-food.group <- read_excel("P:/ene.general/DecentLivingEnergy/Surveys/Brazil/POF 2008-2009/Documentation/POF_2008-2009_Codigos_de_alimentacao.xls",
-                        skip=2) %>% select(-2:-3) %>% setnames(c("code5", "group.id1", "descr1", "group.id2", "descr2")) %>%
-  filter(!is.na(code5))
-food.wgrp.names <- unique(read_excel("P:/ene.general/DecentLivingEnergy/Surveys/Brazil/POF 2008-2009/Documentation/POF_2008-2009_Codigos_de_alimentacao.xls",
-           sheet=3, skip=2) %>% select(3,7)) %>% setnames(c("group.id1", "wgroup"))
-food.grp.names <- unique(read_excel("P:/ene.general/DecentLivingEnergy/Surveys/Brazil/POF 2008-2009/Documentation/POF_2008-2009_Codigos_de_alimentacao.xls",
-                                     sheet=3, skip=2) %>% select(5,8)) %>% setnames(c("group.id2", "group"))
+hh.excl.outeater <- hh %>% left_join(outeaters) %>% filter(!outeater) 
+# Recalculate income groups without outeaters
+hh.excl.outeater <- hh.excl.outeater %>% ungroup() %>%
+  # income groups, decile, quartile separately determined for urban and rural
+  group_by(urban) %>%
+  arrange(urban, inc.percap) %>%
+  mutate(cumpop = cumsum(hh_size*weight)/sum(weight*hh_size)) %>%
+  mutate(decile = cut(cumpop, breaks = seq(0, 1, 0.1), labels=paste0("decile", 1:10), include.lowest = TRUE, ordered=TRUE)) %>%
+  mutate(quartile = cut(cumpop, breaks = seq(0, 1, 0.25), labels=paste0("quartile", 1:4), include.lowest = TRUE, ordered=TRUE)) %>%
+  select(-cumpop) %>%
+  mutate(inc_grp=as.numeric(quartile)) %>%
+  mutate(cluster=paste0(Reg, urban, '.', inc_grp))   # Redefine cluster
 
-# English names for groups + All eatout items combined
-food.group <- food.group %>% 
-  left_join(food.wgrp.names) %>% 
-  left_join(food.grp.names) %>% 
-  select(code5, group.id1, wgroup, group.id2, group) %>%
-  mutate_cond(is.na(group.id2), group.id2="2", group="eatout or prepared" )
-# write.table(food.cat.names, "clipboard", sep="\t", row.names = FALSE, col.names = TRUE)
-
-food.master <- food.all %>% left_join(food.group)
-
-# View(food.master %>% count(group.id1))
-# View(food.master %>% count(group.id2))
-# View(food.master %>% count(group))
+# Find cutoffs for income quartiles
+hh %>% group_by(cluster) %>% summarise(cut.incgrp=first(inc.percap)/365)
+hh.excl.outeater %>% group_by(cluster) %>% summarise(cut.incgrp=first(inc.percap)/365)
 
 
-###### NOT FOR NOW  ######
-# Probably used to justify/unjustify eatout nutrition pattern
-### Separate food consumption data set (POF7)
-# foodcons = char2num(t_consumo_s) %>%
-#   mutate(id=as.character(cod_uf*1e6 + num_seq*1e3 + num_dv*100 + cod_domc)) %>%
-#   mutate(code7=as.numeric(paste0(str_pad(num_quadro,width=2,pad=0), str_pad(cod_item,width=5,pad=0)))) 
-# 
-# length(unique(foodcons$id))
-  
-
+# Master data table for food analysis
+# Merge hh characteristics
+# kcal:vita are nutrient/100g food.
+food.master <- food.tbl %>%
+  inner_join(data.table(hh, key="id"), by="id") %>% data.frame() %>%
+  left_join(outeaters %>% select(-eatout.share), by="id") %>% filter(!outeater) 
+food.master.excl.outeater <- food.tbl %>%
+  inner_join(data.table(hh.excl.outeater, key="id"), by="id") %>% data.frame() 

@@ -54,3 +54,7 @@ BRA0_cookfuel.xlsx
 *.csv
 .RData
 *.Rhistory
+*.xlsx
+Issues.docx
+*.docx
+*.gdx
