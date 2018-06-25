@@ -18,18 +18,23 @@ get.idx <- function(y) {
 # POF.nutri <- POF.nutri %>% mutate(item.num=row_number()) %>% select(item.num, everything()) 
 
 POF.nutri <- read_xlsx(paste0(datadir,"171023 Nutricional values food POF2008-9 - Claudia.xlsx"), sheet=2,
-                       range = "A4:M109", 
-                       col_types=c("text", "text", "text", "numeric", "numeric", "numeric", "numeric", "numeric", "numeric", "numeric", "numeric", "numeric", "numeric")) 
-names(POF.nutri) <- c("item.prt", "item.eng", "POF.num", "cons.percap", "kcal", "protein", "fat", "carb", "fiber", "iron", "zinc", "vita", "taco.num")
+                       range = "A4:O109", 
+                       col_types=c("text", "text", "text", "text", "text", "numeric", "numeric", "numeric", "numeric", "numeric", "numeric", "numeric", "numeric", "numeric", "numeric")) 
+names(POF.nutri) <- c("fgroup.agg", "fgroup", "item.prt", "item.eng", "POF.num", "cons.percap", 
+                      "kcal", "protein", "fat", "carb", "fiber", "iron", "zinc", "vita", "taco.num")
 POF.nutri <- POF.nutri %>% mutate(item.num=row_number()) %>% select(item.num, everything()) 
 
 # Mapped POF
 POF.mapping <- strsplit(POF.nutri$POF.num, c("[,'´`]"))
 POF.mapping <- lapply(POF.mapping, function(x) {as.numeric(x[-1])})
+names(POF.mapping) <- POF.nutri$item.eng
 
 # List of POF item numbers (7 & 5 digits) covered by Claudia's mapping
 POF.covered <- unlist(POF.mapping)
 POF.covered5 <- floor(POF.covered/100)
+
+POF7.items <- data.frame(item.eng=names(POF.covered), code7=POF.covered) %>% mutate(item.eng=gsub("\\d", "", item.eng)) %>% 
+  left_join(POF.nutri %>% select(fgroup.agg, item.eng)) %>% rename(grp=item.eng, wgrp=fgroup.agg)
 
 # Rearrange in terms of POF item number
 POF.nutri.p <- data.frame(code7 = POF.covered, code5 = POF.covered5, item.num=sapply(POF.covered, get.idx)) %>% 
@@ -51,11 +56,14 @@ POF.nutri.p <- POF.nutri.p %>%
 
 ### 2. TACO (2008-2009) based on liv5002.pdf
 taco.raw <- read_xls(paste0(datadir, "Tables of Nutritional Composition of Food - IBGE liv50002.xls"), skip=3, n_max=1971) 
-taco <- taco.raw %>% select(1:3, 7:11, 16, 21, 23:24) 
-names(taco) <- c("code7", "item", "preparation", "kcal", "protein", "fat", "carb", "fiber", "iron", "zinc", "retinol", "retinol.eq")
+taco <- taco.raw %>% select(1:3, 7:13, 15:18, 21, 23:24, 32:34, 42:43) 
+names(taco) <- c("code7", "item", "prep.type", "kcal", "Protein", 
+                 "Fat", "Carb", "Fiber", "Calcium", "Magnesium", "Phosphorus", "Iron", 
+                 "Sodium", "Sodium.added", "Zinc", 
+                 "Retinol", "Retinol.eq", "Vitd", "Vite","Vitc", "Sugar.total", "Sugar.added")
 taco <- taco %>% mutate(code5 = floor(code7/100)) %>% 
-  mutate_at(c("kcal", "protein", "fat", "carb", "fiber", "iron", "zinc", "retinol", "retinol.eq"), as.numeric) %>%
-  mutate(vita=ifelse(is.na(retinol.eq), retinol, retinol.eq)) %>% select(-retinol, -retinol.eq) %>% ungroup() 
+  mutate_at(vars(kcal:Sugar.added), as.numeric) %>%
+  mutate(Vita=ifelse(is.na(Retinol.eq), Retinol, Retinol.eq)) %>% select(-Retinol, -Retinol.eq) %>% ungroup() 
   # rowwise() %>% mutate(vita=sum(retinol, retinol.eq, na.rm = TRUE)) %>% select(-retinol, -retinol.eq) %>% ungroup() 
 
 # Let's remove unnecessary preparation types
@@ -70,7 +78,7 @@ taco.CRU <- taco %>%
 # Item numbers having multiple obs but preperation!=1 or 99
 no.CRU.items <- unique(taco$code7)[which((unique(taco$code7) %in% unique(taco.CRU$code7))==FALSE)]
 
-taco <- taco.CRU %>% 
+taco.CRU <- taco.CRU %>% 
   # Then I select whatever first obs from the no.CRU group
   rbind(taco %>% filter(code7 %in% no.CRU.items) %>% group_by(code7) %>% slice(1)) %>% #
   arrange(code7) %>% select(code7, code5, everything()) %>% ungroup()

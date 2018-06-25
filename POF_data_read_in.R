@@ -37,16 +37,25 @@ ppp_path = "P:/ene.general/DecentLivingEnergy/Surveys/Consumer Prices/Monthly PP
 ppp_fact = filter(readRDS(ppp_path), iso3=="BRA", year==2009, month==1)$ppp_fact
 
 
+### Income conversion to $2010PPP and create income groups
+
+library(WDI)
+PPP <- WDI(country = "BR", indicator = c("PA.NUS.PRVT.PP"), start = 2010, end = 2010, extra = FALSE, cache = NULL)  #[LCU/$]
+CPI <- WDI(country = "BR", indicator = "FP.CPI.TOTL", start = 2008, end = 2010, extra = FALSE, cache = NULL)
+CPI.r <- as.numeric(CPI %>% filter(year==2010) %>% select(FP.CPI.TOTL) / CPI %>% filter(year==2008) %>% select(FP.CPI.TOTL))
+# EXR <- WDI(country = "BR", indicator = "PA.NUS.FCRF", start = 2008, end = 2008, extra = FALSE, cache = NULL) # Exchange rate (MER) [LCU/$]
+
+
 
 ### Load raw POF data
-load(paste0(path_POF, "t_caderneta_despesa_s.rda"))
+load(paste0(path_POF, "t_caderneta_despesa_s.rda")) # POF#3
 load(paste0(path_POF, "t_despesa_individual_s.rda"))
 load(paste0(path_POF, "codigos de alimentacao.rda"))
 load(paste0(path_POF, "t_domicilio_s.rda"))
 load(paste0(path_POF, "poststr.rda"))
 load(paste0(path_POF, "t_morador_s.rda"))
 load(paste0(path_POF, "t_despesa_individual_s.rda"))
-# load(paste0(path_POF, "t_consumo_s.rda"))
+load(paste0(path_POF, "t_consumo_s.rda"))  # POF#7
 # load(paste0(path_POF, "t_despesa_90dias_s.rda"))
 # load(paste0(path_POF, "t_despesa_12meses_s.rda"))
 # load(paste0(path_POF, "t_despesa_veiculo_s.rda"))
@@ -78,11 +87,11 @@ d1 = d %>%
 
 ### Process person data
 d2 = char2num(t_morador_s) %>%
-  # mutate(id=paste0(cod_uf*1e6, num_seq*1e3, num_dv*100, cod_domc)) %>%
   mutate(id=as.character(cod_uf*1e6 + num_seq*1e3 + num_dv*100 + cod_domc)) %>%
-  mutate(cid=paste0(id,cod_unid_consumo)) %>%
-  mutate(pid=paste0(id,cod_unid_consumo,num_informante)) %>%
+  # mutate(cid=paste0(id,cod_unid_consumo)) %>%
+  # mutate(pid=paste0(id,cod_unid_consumo,num_informante)) %>%
   rename(weight=fator_expansao2, age=idade_anos, pheight=altura_imputado, pweight=peso_imputado) %>%
+  mutate(id.member=num_informante, adult=(age>=18)) %>%
   genvar(male, cod_sexo, c(1,0), c(1,2)) %>%
   genvar(rel, cod_rel_pess_refe_uc, c('Head','Spouse','Child','Other relative','Other non-relative','Tenant','Domestic employee','Relative of domestic employee'), 1:8) %>%
   genvar(head, rel, T, "Head", other=F) %>%
@@ -97,8 +106,9 @@ d2 = char2num(t_morador_s) %>%
   left_join(educ_years) %>% # Add years of schooling completed
   mutate(student=as.integer(cod_curso_freq>0)) %>%
   mutate(earner=as.integer(cod_sit_receita==1)) %>%
-  data.table(key = "id") %>%
-  select(id, cid, pid, weight, head, rel, male, age, race, educ_level, educ_years, student, earner, pheight, pweight)
+  data.table(key = c("id", "id.member")) %>%
+  select(id, id.member, weight, head, rel, male, adult, age, race, educ_level, educ_years, student, earner, pheight, pweight)
+  # select(id, cid, pid, weight, head, rel, male, age, race, educ_level, educ_years, student, earner, pheight, pweight)
 
 
 
@@ -134,6 +144,29 @@ hh = Reduce(function(...) left_join(...), list(d1,pp))
 #--------------------------
 
 
+# view(indiv.food %>% filter(id==11001903) %>% arrange(code7) %>% 
+#   full_join((food %>% filter(id==11001903) %>% arrange(code7)), by=c("code7", "id")))
+
+# Add more to hh
+hh <- hh %>% mutate(income = income * CPI.r / PPP$PA.NUS.PRVT.PP) %>% 
+  mutate(inc.percap = income/hh_size) %>% ungroup() %>%
+  # income groups, decile, quartile separately determined for urban and rural
+  group_by(urban) %>%
+  arrange(urban, inc.percap) %>%
+  mutate(cumpop = cumsum(hh_size*weight)/sum(weight*hh_size)) %>%
+  mutate(decile = cut(cumpop, breaks = seq(0, 1, 0.1), labels=paste0("decile", 1:10), include.lowest = TRUE, ordered=TRUE)) %>%
+  mutate(quartile = cut(cumpop, breaks = seq(0, 1, 0.25), labels=paste0("quartile", 1:4), include.lowest = TRUE, ordered=TRUE)) %>%
+  select(-cumpop) %>%
+  # mutate(inc_grp=as.integer(cut(inc.percap,breaks=c(0, 1.4*365, 2.8*365, 5.6*365, max(inc.percap)*365), labels=c(1:4)))) %>% # NEED TO ADJUST!
+  mutate(inc_grp=as.numeric(quartile)) %>% 
+  mutate(female_adult=hh_size-minor-male_adult, female_minor=minor-male_minor) %>%
+  mutate(cu_eq=(male_adult*getcu("male_adult")+female_adult*getcu("female_adult")+
+                  male_minor*getcu("male_minor")+female_minor*getcu("female_minor"))) %>%
+  left_join(states.BR) %>% ungroup() %>%
+  mutate(cluster=paste0(Reg, urban, '.', inc_grp)) %>%  # By region or state?
+  data.table(key="id")
+
+pop.POF <- as.numeric(hh %>% summarise(pop=sum(hh_size*weight)))
 
 ### From here, food-specific data are imported.
 source("POF_taco_link.R")  # derives as result 'POF.nutri.p' which has POF-TACO mapping
@@ -153,7 +186,7 @@ food = char2num(t_caderneta_despesa_s) %>%
   group_by(id, code7) %>%  
   summarise(val_tot=sum(value), qty_tot=sum(kg)) %>%  # Sum values by household and item
   filter(val_tot>0 | is.na(val_tot)) %>%
-  left_join(taco %>% select(-preparation, -code5), by="code7") %>%
+  left_join(taco.CRU %>% select(-prep.type, -code5), by="code7") %>%
   mutate(code5=floor(code7/100)) %>%
   rename(POF.item=item)
 
@@ -190,24 +223,21 @@ cons = char2num(t_despesa_individual_s) %>%
   select(id, code7, POF.item=product, val_tot, eatout) 
 
 
+### Explore the individual survey (POF7)
+# 'local' seems to be at home or outside.
+# No need for many variables here like income, weight.
+# Unit, preparation, quantity, local are important.
+# num_quadro & utiliza_frequentemente?
+indiv.food = char2num(t_consumo_s) %>% rename(code7=cod_item) %>% 
+  mutate(id=as.character(cod_uf*1e6 + num_seq*1e3 + num_dv*100 + cod_domc)) %>%
+  rename(location=local, qty_tot=qtd_final, prep.type=cod_preparacao, id.member=num_informante, day.of.week=dia_da_semana) %>% # in grams
+  select(id, id.member, code7, qty_tot, prep.type, location, day.of.week) %>%
+  data.table(key = c("id", "id.member", "code7")) %>%
+  left_join(taco %>% data.table(key="code7") %>% select(-code5))
 
-# Add more to hh
-hh <- hh %>% mutate(income = income * CPI.r / PPP$PA.NUS.PRVT.PP) %>% 
-  mutate(inc.percap = income/hh_size) %>% ungroup() %>%
-  # income groups, decile, quartile separately determined for urban and rural
-  group_by(urban) %>%
-  arrange(urban, inc.percap) %>%
-  mutate(cumpop = cumsum(hh_size*weight)/sum(weight*hh_size)) %>%
-  mutate(decile = cut(cumpop, breaks = seq(0, 1, 0.1), labels=paste0("decile", 1:10), include.lowest = TRUE, ordered=TRUE)) %>%
-  mutate(quartile = cut(cumpop, breaks = seq(0, 1, 0.25), labels=paste0("quartile", 1:4), include.lowest = TRUE, ordered=TRUE)) %>%
-  select(-cumpop) %>%
-  # mutate(inc_grp=as.integer(cut(inc.percap,breaks=c(0, 1.4*365, 2.8*365, 5.6*365, max(inc.percap)*365), labels=c(1:4)))) %>% # NEED TO ADJUST!
-  mutate(inc_grp=as.numeric(quartile)) %>% 
-  mutate(female_adult=hh_size-minor-male_adult, female_minor=minor-male_minor) %>%
-  mutate(cu_eq=(male_adult*getcu("male_adult")+female_adult*getcu("female_adult")+
-                  male_minor*getcu("male_minor")+female_minor*getcu("female_minor"))) %>%
-  left_join(states.BR) %>%
-  mutate(cluster=paste0(Reg, urban, '.', inc_grp))   # By region or state?
+indiv.sugar <- indiv.food %>% filter(code7 %in% c(6906602, 6907001)) %>% mutate(Sugar.added_tot=qty_tot) %>%
+  data.frame() %>% group_by(id, id.member, location) %>% 
+  summarise(Sugar.added_tot.sep=sum(Sugar.added_tot, na.rm=TRUE))  # make it as daily average over the two days
 
 
 ### Combine food group information
@@ -243,13 +273,6 @@ food.tbl <- food.tbl %>% rbind.fill(cons) %>%
 
 
 
-### Income conversion to $2010PPP and create income groups
-
-library(WDI)
-PPP <- WDI(country = "BR", indicator = c("PA.NUS.PRVT.PP"), start = 2010, end = 2010, extra = FALSE, cache = NULL)  #[LCU/$]
-CPI <- WDI(country = "BR", indicator = "FP.CPI.TOTL", start = 2008, end = 2010, extra = FALSE, cache = NULL)
-CPI.r <- as.numeric(CPI %>% filter(year==2010) %>% select(FP.CPI.TOTL) / CPI %>% filter(year==2008) %>% select(FP.CPI.TOTL))
-# EXR <- WDI(country = "BR", indicator = "PA.NUS.FCRF", start = 2008, end = 2008, extra = FALSE, cache = NULL) # Exchange rate (MER) [LCU/$]
 
 
 
@@ -283,3 +306,8 @@ food.master <- food.tbl %>%
   left_join(outeaters %>% select(-eatout.share), by="id") %>% filter(!outeater) 
 food.master.excl.outeater <- food.tbl %>%
   inner_join(data.table(hh.excl.outeater, key="id"), by="id") %>% data.frame() 
+
+
+
+rm(t_despesa_individual_s, t_caderneta_despesa_s, t_morador_s, t_consumo_s, d2, d, t_domicilio_s)
+gc()

@@ -43,8 +43,10 @@ require(xlsx)
 states.BR <- read.csv(paste0(datadir, "../States.csv"), header=TRUE, as.is=T) %>% select(abbr, state, Reg) %>% slice(-c(28:29))
 
 ### Basic parameters
-dris <- read.csv(paste0(datadir, "../DRI-India.csv"), header=TRUE)  # NEED TO ADJUST
 CU <- read.csv(paste0(datadir, "../cu_eq.csv"), header=TRUE)  
+dris <- read.xlsx(paste0(datadir, "../EAR-Brazil.xlsx"), header=TRUE, sheetIndex=1, colIndex=1:5)  # NEED TO ADJUST
+dris.wide <- dris %>% select(-RDA.AI) %>% spread(Nutrient, EAR)
+names(dris.wide)[-c(1,2)] <- paste0(names(dris.wide)[-c(1,2)], "_EAR")
 
 ### Functions
 # Function to return the household-specific nutrient DRIs given composition of age and adult/minor ###
